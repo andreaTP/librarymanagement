@@ -259,6 +259,91 @@ lazy val lmIvy = (project in file("ivy"))
     ),
   )
 
+lazy val scriptedTestSbtRepo = settingKey[String]("SBT repository to be used in scripted tests")
+lazy val scriptedTestSbtRef = settingKey[String]("SBT branch to be used in scripted tests")
+lazy val scriptedTestLMImpl = settingKey[String]("Librarymanagement implementation to be used in scripted tests")
+
+Zero / scriptedTestSbtRepo := "https://github.com/sbt/sbt.git"
+Zero / scriptedTestSbtRef := "develop"
+Zero / scriptedTestLMImpl := "ivy"
+
+lazy val lmScriptedTest = (project in file("scripted-test"))
+  .enablePlugins(SbtPlugin)
+  .settings(
+    commonSettings,
+    skip in publish := true,
+    name := "scripted-test",
+    scriptedLaunchOpts := { scriptedLaunchOpts.value ++
+      Seq("-Xmx1024M", "-Dplugin.version=" + version.value)
+    },
+    scriptedBufferLog := false,
+    scriptedTests := {
+
+      val targetDir = target.value / "sbt"
+
+      import org.eclipse.jgit.api._
+
+      if (!targetDir.exists) {
+        IO.createDirectory(targetDir)
+
+        new CloneCommand()
+          .setDirectory(targetDir)
+          .setURI(scriptedTestSbtRepo.value)
+          .call()
+
+        val git = Git.open(targetDir)
+
+        git.checkout().setName(scriptedTestSbtRef.value).call()
+      }
+
+      val sbtUniqueVersion =
+        sbtVersion.value + "-" +
+        java.util.UUID.randomUUID.toString.replace("-","") + "-" +
+        scriptedTestLMImpl.value + "-SNAPSHOT"
+
+      import sys.process._
+      val cmd =  Process(
+        Seq(
+          "sbt",
+          "-J-Xms2048m",
+          "-J-Xmx2048m",
+          "-J-XX:ReservedCodeCacheSize=256m",
+          "-J-XX:MaxMetaspaceSize=512m",
+          s"""-Dsbt.librarymanagement.version=${version.value}""",
+          s"""-Dsbt.librarymanagement.groupID=${organization.value}""",
+          s"""-Dsbt.librarymanagement.artifactID=librarymanagement-${scriptedTestLMImpl.value}""",
+          s"""set ThisBuild / version := "${sbtUniqueVersion}"""",
+          "clean",
+          "publishLocal"
+        ),
+        Some(targetDir)
+      )
+      
+      cmd !
+
+      val testDir = sbtTestDirectory.value / "lmScriptedTest"
+
+      IO.listFiles(testDir).foreach { d =>
+        if (d.isDirectory) {
+          IO.createDirectory(d / "project")
+          IO.write(d / "project" / "build.properties", s"sbt.version=$sbtUniqueVersion")
+        }
+      }
+
+      scriptedTests.value
+    }
+  )
+
+addCommandAlias("scriptedIvy", Seq(
+  "lmCore/publishLocal",
+  "lmIvy/publishLocal",
+  "lmScriptedTest/clean",
+  """set ThisBuild / scriptedTestSbtRepo := "https://github.com/andreaTP/sbt"""", // waiting for https://github.com/sbt/sbt/pull/4398 to be merged
+  """set ThisBuild / scriptedTestSbtRef := "b7b94887179053228c88782b316bf0b5973a529a"""", // Last commit in https://github.com/andreaTP/sbt/tree/configurableLibraryManagement
+  """set ThisBuild / scriptedTestLMImpl := "ivy"""",
+  """set ThisBuild / scriptedLaunchOpts += "-Ddependency.resolution=set ThisBuild / dependencyResolution := sbt.librarymanagement.ivy.IvyDependencyResolution(ivyConfiguration.value)" """,
+  "lmScriptedTest/scripted").mkString(";",";",""))
+
 def customCommands: Seq[Setting[_]] = Seq(
   commands += Command.command("release") { state =>
     // "clean" ::
