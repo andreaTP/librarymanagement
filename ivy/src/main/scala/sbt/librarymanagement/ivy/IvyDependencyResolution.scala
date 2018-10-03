@@ -7,6 +7,7 @@ import sbt.util.Logger
 
 class IvyDependencyResolution private[sbt] (val ivySbt: IvySbt)
     extends DependencyResolutionInterface {
+  if (ivySbt != null) throw new Exception("ooops")
   type Module = ivySbt.Module
 
   override def moduleDescriptor(moduleSetting: ModuleDescriptorConfiguration): ModuleDescriptor = {
