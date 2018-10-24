@@ -61,18 +61,18 @@ class ResolutionSpec extends BaseCoursierSpecification {
   }
 
   // TODO: fix this test
-  // it should "resolve sbt jars" in {
-  //   val dependencies =
-  //     Vector(("org.scala-sbt" % "sbt" % "1.1.0" % "provided"))
-  //   val coursierModule = module(stubModule, dependencies, Some("2.12.4"))
-  //   val resolution =
-  //     lmEngine.update(coursierModule, UpdateConfiguration(), UnresolvedWarningConfiguration(), log)
+  it should "resolve sbt jars" in {
+    val dependencies =
+      Vector(("org.scala-sbt" % "sbt" % "1.1.0" % "provided"))
+    val coursierModule = module(stubModule, dependencies, Some("2.12.4"))
+    val resolution =
+      lmEngine.update(coursierModule, UpdateConfiguration(), UnresolvedWarningConfiguration(), log)
 
-  //   val r = resolution.right.get
+    val r = resolution.right.get
 
-  //   val modules = r.configurations.flatMap(_.modules)
-  //   modules.map(_.module.name) should contain("main_2.12")
-  // }
+    val modules = r.configurations.flatMap(_.modules)
+    modules.map(_.module.name) should contain("main_2.12")
+  }
 
   it should "resolve with default resolvers" in {
     val dependencies =

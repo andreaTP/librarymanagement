@@ -8,7 +8,7 @@ import scala.concurrent.ExecutionContext
 
 import coursier.{ Artifact, Resolution, _ }
 import coursier.util.{ Gather, Task }
-import sbt.librarymanagement.Configurations.{ CompilerPlugin, Component, ScalaTool }
+// import sbt.librarymanagement.Configurations.{ CompilerPlugin, Component, ScalaTool }
 import sbt.librarymanagement._
 import sbt.util.Logger
 
@@ -19,6 +19,7 @@ case class CoursierModuleDescriptor(
     directDependencies: Vector[ModuleID],
     scalaModuleInfo: Option[ScalaModuleInfo],
     moduleSettings: ModuleSettings,
+    configurations: Vector[Configuration],
     extraInputHash: Long
 ) extends ModuleDescriptor
 
@@ -100,9 +101,25 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
       moduleSetting.dependencies,
       moduleSetting.scalaModuleInfo,
       CoursierModuleSettings(),
+      moduleSetting.configurations,
       extraInputHash
     )
   }
+
+  // verify
+  private[sbt] def toModule(module: ModuleDescriptor): CoursierModuleDescriptor =
+    module match {
+      case m: CoursierModuleDescriptor @unchecked => m
+      // this happen and it's really wired
+      case ivyModule: sbt.internal.librarymanagement.IvySbt#Module =>
+        CoursierModuleDescriptor(
+          ivyModule.directDependencies,
+          ivyModule.scalaModuleInfo,
+          CoursierModuleSettings(),
+          ivyModule.configurations,
+          extraInputHash
+        )
+    }
 
   val ivyHome = sys.props.getOrElse(
     "ivy.home",
@@ -133,13 +150,23 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
                       configuration: UpdateConfiguration,
                       uwconfig: UnresolvedWarningConfiguration,
                       log: Logger): Either[UnresolvedWarning, UpdateReport] = {
+    println("module is " + module)
+
+    println("dependencies are " + module.directDependencies)
+    implicit val ec = pool
+    val ignoreArtifactErrors = configuration.missingOk
+    val configs = toModule(module).configurations
 
     if (reorderedResolvers.isEmpty) {
       log.error(
         "Dependency resolution is configured with an empty list of resolvers. This is unlikely to work.")
     }
 
-    val dependencies = module.directDependencies.map(toCoursierDependency).flatten.toSet
+    val dependencies =
+      module.directDependencies
+        .map(toCoursierDependency)
+        .flatten
+        .toSet
     val start = Resolution(dependencies)
     val authentication = None // TODO: get correct value
     val ivyConfiguration = ivyProperties // TODO: is it enough?
@@ -149,8 +176,6 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
         Cache.ivy2Local,
         Cache.ivy2Cache
       )
-
-    implicit val ec = pool
 
     val coursierLogger = createLogger()
     try {
@@ -175,7 +200,7 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
           .unsafeRun()
           .toMap
 
-        toUpdateReport(resolution, localArtifacts, log)
+        toUpdateReport(resolution, localArtifacts, configs, log)
       }
 
       if (resolution.isDone &&
@@ -183,7 +208,7 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
           resolution.conflicts.isEmpty) {
         updateReport()
       } else if (resolution.isDone &&
-                 (!resolution.errors.isEmpty && coursierConfiguration.ignoreArtifactErrors)
+                 (!resolution.errors.isEmpty && ignoreArtifactErrors)
                  && resolution.conflicts.isEmpty) {
         log.warn(s"""Failed to download artifacts: ${resolution.errors
           .map(_._2)
@@ -216,11 +241,13 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
 
     val extraAttrs = FromSbt.attributes(moduleID.extraDependencyAttributes)
 
-    val mapping = moduleID.configurations.getOrElse("compile")
+    val mapping =
+      moduleID.configurations.getOrElse("compile")
 
     // import _root_.coursier.ivy.IvyXml.{ mappings => ivyXmlMappings }
     // val allMappings = ivyXmlMappings(mapping)
     for {
+      (from, to) <- allMappings
       attr <- attributes
     } yield {
       Dependency(
@@ -238,6 +265,7 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
 
   private def toUpdateReport(resolution: Resolution,
                              artifactFilesOrErrors0: Map[Artifact, Either[FileError, File]],
+                             configs: Vector[Configuration],
                              log: Logger): Either[UnresolvedWarning, UpdateReport] = {
 
     val artifactFiles = artifactFilesOrErrors0.collect {
@@ -258,7 +286,7 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
     val depsByConfig =
       resolution.dependencies.groupBy(_.configuration).mapValues(_.toSeq)
 
-    val configurations = extractConfigurationTree
+    val configurations = extractConfigurationTree(configs)
 
     val configResolutions =
       (depsByConfig.keys ++ configurations.keys).map(k => (k, resolution)).toMap
@@ -295,11 +323,15 @@ private[sbt] class CoursierDependencyResolution(coursierConfiguration: CoursierC
 
   // Key is the name of the configuration (i.e. `compile`) and the values are the name itself plus the
   // names of the configurations that this one depends on.
-  private def extractConfigurationTree: ConfigurationDependencyTree = {
-    (Configurations.default ++
-      Configurations.defaultInternal ++
-      Seq(ScalaTool, CompilerPlugin, Component))
-      .map(c => (c.name, c.extendsConfigs.map(_.name) :+ c.name))
+  private def extractConfigurationTree(
+      configs: Vector[Configuration]): ConfigurationDependencyTree = {
+    println("CONFIGS ARE " + configs)
+    val c =
+      configs ++ (Configurations.default ++ Configurations.defaultInternal)
+
+    //(Configurations.default ++ Configurations.defaultInternal)
+    //Seq(ScalaTool, CompilerPlugin, Component))
+    c.map(c => (c.name, c.extendsConfigs.map(_.name) :+ c.name))
       .toMap
       .mapValues(_.toSet)
   }
